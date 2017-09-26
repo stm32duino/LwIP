@@ -1,13 +1,10 @@
 /**
  * @file
- *
- * Neighbor discovery and stateless address autoconfiguration for IPv6.
- * Aims to be compliant with RFC 4861 (Neighbor discovery) and RFC 4862
- * (Address autoconfiguration).
+ * MQTT client options
  */
 
 /*
- * Copyright (c) 2010 Inico Technologies Ltd.
+ * Copyright (c) 2016 Erik Andersson
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
@@ -34,51 +31,73 @@
  *
  * This file is part of the lwIP TCP/IP stack.
  *
- * Author: Ivan Delamer <delamer@inicotech.com>
+ * Author: Erik Andersson
  *
- *
- * Please coordinate changes and requests with Ivan Delamer
- * <delamer@inicotech.com>
  */
-
-#ifndef LWIP_HDR_ND6_H
-#define LWIP_HDR_ND6_H
+#ifndef LWIP_HDR_APPS_MQTT_OPTS_H
+#define LWIP_HDR_APPS_MQTT_OPTS_H
 
 #include "lwip/opt.h"
 
-#if LWIP_IPV6  /* don't build if not configured for use in lwipopts.h */
-
-#include "lwip/ip6_addr.h"
-#include "lwip/err.h"
-
-#ifdef __cplusplus
+#ifdef	__cplusplus
 extern "C" {
 #endif
 
-/** 1 second period */
-#define ND6_TMR_INTERVAL 1000
+/**
+ * @defgroup mqtt_opts Options
+ * @ingroup mqtt
+ * @{
+ */
 
-struct pbuf;
-struct netif;
+/**
+ * Output ring-buffer size, must be able to fit largest outgoing publish message topic+payloads
+ */
+#ifndef MQTT_OUTPUT_RINGBUF_SIZE
+#define MQTT_OUTPUT_RINGBUF_SIZE 256
+#endif
 
-void nd6_tmr(void);
-void nd6_input(struct pbuf *p, struct netif *inp);
-void nd6_clear_destination_cache(void);
-struct netif *nd6_find_route(const ip6_addr_t *ip6addr);
-err_t nd6_get_next_hop_addr_or_queue(struct netif *netif, struct pbuf *q, const ip6_addr_t *ip6addr, const u8_t **hwaddrp);
-u16_t nd6_get_destination_mtu(const ip6_addr_t *ip6addr, struct netif *netif);
-#if LWIP_ND6_TCP_REACHABILITY_HINTS
-void nd6_reachability_hint(const ip6_addr_t *ip6addr);
-#endif /* LWIP_ND6_TCP_REACHABILITY_HINTS */
-void nd6_cleanup_netif(struct netif *netif);
-#if LWIP_IPV6_MLD
-void nd6_adjust_mld_membership(struct netif *netif, s8_t addr_idx, u8_t new_state);
-#endif /* LWIP_IPV6_MLD */
+/**
+ * Number of bytes in receive buffer, must be at least the size of the longest incoming topic + 8
+ * If one wants to avoid fragmented incoming publish, set length to max incoming topic length + max payload length + 8
+ */
+#ifndef MQTT_VAR_HEADER_BUFFER_LEN
+#define MQTT_VAR_HEADER_BUFFER_LEN 128
+#endif
+
+/**
+ * Maximum number of pending subscribe, unsubscribe and publish requests to server .
+ */
+#ifndef MQTT_REQ_MAX_IN_FLIGHT
+#define MQTT_REQ_MAX_IN_FLIGHT 4
+#endif
+
+/**
+ * Seconds between each cyclic timer call.
+ */
+#ifndef MQTT_CYCLIC_TIMER_INTERVAL
+#define MQTT_CYCLIC_TIMER_INTERVAL 5
+#endif
+
+/**
+ * Publish, subscribe and unsubscribe request timeout in seconds.
+ */
+#ifndef MQTT_REQ_TIMEOUT
+#define MQTT_REQ_TIMEOUT 30
+#endif
+
+/**
+ * Seconds for MQTT connect response timeout after sending connect request
+ */
+#ifndef MQTT_CONNECT_TIMOUT
+#define MQTT_CONNECT_TIMOUT 100
+#endif
+
+/**
+ * @}
+ */
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_IPV6 */
-
-#endif /* LWIP_HDR_ND6_H */
+#endif /* LWIP_HDR_APPS_MQTT_OPTS_H */

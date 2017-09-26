@@ -61,8 +61,6 @@
 
 /** Initial CWND calculation as defined RFC 2581 */
 #define LWIP_TCP_CALC_INITIAL_CWND(mss) LWIP_MIN((4U * (mss)), LWIP_MAX((2U * (mss)), 4380U));
-/** Initial slow start threshold value: we use the full window */
-#define LWIP_TCP_INITIAL_SSTHRESH(pcb)  ((pcb)->snd_wnd)
 
 /* These variables are global to all functions involved in the input
    processing of TCP segments. They are set by the tcp_input()
@@ -90,6 +88,8 @@ static void tcp_parseopt(struct tcp_pcb *pcb);
 
 static void tcp_listen_input(struct tcp_pcb_listen *pcb);
 static void tcp_timewait_input(struct tcp_pcb *pcb);
+
+static int tcp_input_delayed_close(struct tcp_pcb *pcb);
 
 /**
  * The initial input processing of TCP. It verifies the TCP header, demultiplexes
@@ -358,6 +358,11 @@ tcp_input(struct pbuf *p, struct netif *inp)
         ((pcb->refused_data != NULL) && (tcplen > 0))) {
         /* pcb has been aborted or refused data is still refused and the new
            segment contains data */
+        if (pcb->rcv_ann_wnd == 0) {
+          /* this is a zero-window probe, we respond to it with current RCV.NXT
+          and drop the data segment */
+          tcp_send_empty_ack(pcb);
+        }
         TCP_STATS_INC(tcp.drop);
         MIB2_STATS_INC(mib2.tcpinerrs);
         goto aborted;
@@ -373,7 +378,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
            end. We then call the error callback to inform the
            application that the connection is dead before we
            deallocate the PCB. */
-        TCP_EVENT_ERR(pcb->errf, pcb->callback_arg, ERR_RST);
+        TCP_EVENT_ERR(pcb->state, pcb->errf, pcb->callback_arg, ERR_RST);
         tcp_pcb_remove(&tcp_active_pcbs, pcb);
         memp_free(MEMP_TCP_PCB, pcb);
       } else {
@@ -401,17 +406,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
           }
           recv_acked = 0;
         }
-        if (recv_flags & TF_CLOSED) {
-          /* The connection has been closed and we will deallocate the
-             PCB. */
-          if (!(pcb->flags & TF_RXCLOSED)) {
-            /* Connection closed although the application has only shut down the
-               tx side: call the PCB's err callback and indicate the closure to
-               ensure the application doesn't continue using the PCB. */
-            TCP_EVENT_ERR(pcb->errf, pcb->callback_arg, ERR_CLSD);
-          }
-          tcp_pcb_remove(&tcp_active_pcbs, pcb);
-          memp_free(MEMP_TCP_PCB, pcb);
+        if (tcp_input_delayed_close(pcb)) {
           goto aborted;
         }
 #if TCP_QUEUE_OOSEQ && LWIP_WND_SCALE
@@ -485,6 +480,9 @@ tcp_input(struct pbuf *p, struct netif *inp)
         }
 
         tcp_input_pcb = NULL;
+        if (tcp_input_delayed_close(pcb)) {
+          goto aborted;
+        }
         /* Try to send something out. */
         tcp_output(pcb);
 #if TCP_INPUT_DEBUG
@@ -529,6 +527,30 @@ dropped:
   pbuf_free(p);
 }
 
+/** Called from tcp_input to check for TF_CLOSED flag. This results in closing
+ * and deallocating a pcb at the correct place to ensure noone references it
+ * any more.
+ * @returns 1 if the pcb has been closed and deallocated, 0 otherwise
+ */
+static int
+tcp_input_delayed_close(struct tcp_pcb *pcb)
+{
+  if (recv_flags & TF_CLOSED) {
+    /* The connection has been closed and we will deallocate the
+        PCB. */
+    if (!(pcb->flags & TF_RXCLOSED)) {
+      /* Connection closed although the application has only shut down the
+          tx side: call the PCB's err callback and indicate the closure to
+          ensure the application doesn't continue using the PCB. */
+      TCP_EVENT_ERR(pcb->state, pcb->errf, pcb->callback_arg, ERR_CLSD);
+    }
+    tcp_pcb_remove(&tcp_active_pcbs, pcb);
+    memp_free(MEMP_TCP_PCB, pcb);
+    return 1;
+  }
+  return 0;
+}
+
 /**
  * Called by tcp_input() when a segment arrives for a listening
  * connection (from tcp_input()).
@@ -542,6 +564,7 @@ static void
 tcp_listen_input(struct tcp_pcb_listen *pcb)
 {
   struct tcp_pcb *npcb;
+  u32_t iss;
   err_t rc;
 
   if (flags & TCP_RST) {
@@ -589,6 +612,11 @@ tcp_listen_input(struct tcp_pcb_listen *pcb)
     npcb->state = SYN_RCVD;
     npcb->rcv_nxt = seqno + 1;
     npcb->rcv_ann_right_edge = npcb->rcv_nxt;
+    iss = tcp_next_iss(npcb);
+    npcb->snd_wl2 = iss;
+    npcb->snd_nxt = iss;
+    npcb->lastack = iss;
+    npcb->snd_lbb = iss;
     npcb->snd_wl1 = seqno - 1;/* initialise to seqno-1 to force window update */
     npcb->callback_arg = pcb->callback_arg;
 #if LWIP_CALLBACK_API || TCP_LISTEN_BACKLOG
@@ -602,9 +630,8 @@ tcp_listen_input(struct tcp_pcb_listen *pcb)
 
     /* Parse any options in the SYN. */
     tcp_parseopt(npcb);
-    npcb->snd_wnd = SND_WND_SCALE(npcb, tcphdr->wnd);
+    npcb->snd_wnd = tcphdr->wnd;
     npcb->snd_wnd_max = npcb->snd_wnd;
-    npcb->ssthresh = LWIP_TCP_INITIAL_SSTHRESH(npcb);
 
 #if TCP_CALCULATE_EFF_SEND_MSS
     npcb->mss = tcp_eff_send_mss(npcb->mss, &npcb->local_ip, &npcb->remote_ip);
@@ -751,7 +778,7 @@ tcp_process(struct tcp_pcb *pcb)
       pcb->rcv_nxt = seqno + 1;
       pcb->rcv_ann_right_edge = pcb->rcv_nxt;
       pcb->lastack = ackno;
-      pcb->snd_wnd = SND_WND_SCALE(pcb, tcphdr->wnd);
+      pcb->snd_wnd = tcphdr->wnd;
       pcb->snd_wnd_max = pcb->snd_wnd;
       pcb->snd_wl1 = seqno - 1; /* initialise to seqno - 1 to force window update */
       pcb->state = ESTABLISHED;
@@ -759,9 +786,6 @@ tcp_process(struct tcp_pcb *pcb)
 #if TCP_CALCULATE_EFF_SEND_MSS
       pcb->mss = tcp_eff_send_mss(pcb->mss, &pcb->local_ip, &pcb->remote_ip);
 #endif /* TCP_CALCULATE_EFF_SEND_MSS */
-
-      /* Set ssthresh again after changing 'mss' and 'snd_wnd' */
-      pcb->ssthresh = LWIP_TCP_INITIAL_SSTHRESH(pcb);
 
       pcb->cwnd = LWIP_TCP_CALC_INITIAL_CWND(pcb->mss);
       LWIP_DEBUGF(TCP_CWND_DEBUG, ("tcp_process (SENT): cwnd %"TCPWNDSIZE_F
@@ -805,9 +829,12 @@ tcp_process(struct tcp_pcb *pcb)
       tcp_rst(ackno, seqno + tcplen, ip_current_dest_addr(),
         ip_current_src_addr(), tcphdr->dest, tcphdr->src);
       /* Resend SYN immediately (don't wait for rto timeout) to establish
-        connection faster */
-      pcb->rtime = 0;
-      tcp_rexmit_rto(pcb);
+        connection faster, but do not send more SYNs than we otherwise would
+        have, or we might get caught in a loop on loopback interfaces. */
+      if (pcb->nrtx < TCP_SYNMAXRTX) {
+        pcb->rtime = 0;
+        tcp_rexmit_rto(pcb);
+      }
     }
     break;
   case SYN_RCVD:
@@ -816,14 +843,16 @@ tcp_process(struct tcp_pcb *pcb)
       if (TCP_SEQ_BETWEEN(ackno, pcb->lastack+1, pcb->snd_nxt)) {
         pcb->state = ESTABLISHED;
         LWIP_DEBUGF(TCP_DEBUG, ("TCP connection established %"U16_F" -> %"U16_F".\n", inseg.tcphdr->src, inseg.tcphdr->dest));
+#if LWIP_CALLBACK_API || TCP_LISTEN_BACKLOG
 #if LWIP_CALLBACK_API
         LWIP_ASSERT("pcb->listener->accept != NULL",
           (pcb->listener == NULL) || (pcb->listener->accept != NULL));
+#endif
         if (pcb->listener == NULL) {
           /* listen pcb might be closed by now */
           err = ERR_VAL;
         } else
-#endif
+#endif /* LWIP_CALLBACK_API || TCP_LISTEN_BACKLOG */
         {
           tcp_backlog_accepted(pcb);
           /* Call the accept function. */
@@ -841,11 +870,6 @@ tcp_process(struct tcp_pcb *pcb)
         /* If there was any data contained within this ACK,
          * we'd better pass it on to the application as well. */
         tcp_receive(pcb);
-
-        /* passive open: update initial ssthresh now that the correct window is
-           known: if the remote side supports window scaling, the window sent
-           with the initial SYN can be smaller than the one used later */
-        pcb->ssthresh = LWIP_TCP_INITIAL_SSTHRESH(pcb);
 
         /* Prevent ACK for SYN to generate a sent event */
         if (recv_acked != 0) {
@@ -914,7 +938,7 @@ tcp_process(struct tcp_pcb *pcb)
     break;
   case CLOSING:
     tcp_receive(pcb);
-    if (flags & TCP_ACK && ackno == pcb->snd_nxt && pcb->unsent == NULL) {
+    if ((flags & TCP_ACK) && ackno == pcb->snd_nxt && pcb->unsent == NULL) {
       LWIP_DEBUGF(TCP_DEBUG, ("TCP connection closed: CLOSING %"U16_F" -> %"U16_F".\n", inseg.tcphdr->src, inseg.tcphdr->dest));
       tcp_pcb_purge(pcb);
       TCP_RMV_ACTIVE(pcb);
@@ -924,7 +948,7 @@ tcp_process(struct tcp_pcb *pcb)
     break;
   case LAST_ACK:
     tcp_receive(pcb);
-    if (flags & TCP_ACK && ackno == pcb->snd_nxt && pcb->unsent == NULL) {
+    if ((flags & TCP_ACK) && ackno == pcb->snd_nxt && pcb->unsent == NULL) {
       LWIP_DEBUGF(TCP_DEBUG, ("TCP connection closed: LAST_ACK %"U16_F" -> %"U16_F".\n", inseg.tcphdr->src, inseg.tcphdr->dest));
       /* bugfix #21699: don't set pcb->state to CLOSED here or we risk leaking segments */
       recv_flags |= TF_CLOSED;
@@ -1406,7 +1430,7 @@ tcp_receive(struct tcp_pcb *pcb)
                    TCP_SEQ_GEQ(seqno + tcplen,
                                next->tcphdr->seqno + next->len)) {
               /* inseg cannot have FIN here (already processed above) */
-              if (TCPH_FLAGS(next->tcphdr) & TCP_FIN &&
+              if ((TCPH_FLAGS(next->tcphdr) & TCP_FIN) != 0 &&
                   (TCPH_FLAGS(inseg.tcphdr) & TCP_SYN) == 0) {
                 TCPH_SET_FLAG(inseg.tcphdr, TCP_FIN);
                 tcplen = TCP_TCPLEN(&inseg);
@@ -1744,11 +1768,11 @@ tcp_parseopt(struct tcp_pcb *pcb)
           LWIP_DEBUGF(TCP_INPUT_DEBUG, ("tcp_parseopt: bad length\n"));
           return;
         }
+        /* An WND_SCALE option with the right option length. */
+        data = tcp_getoptbyte();
         /* If syn was received with wnd scale option,
            activate wnd scale opt, but only if this is not a retransmission */
         if ((flags & TCP_SYN) && !(pcb->flags & TF_WND_SCALE)) {
-          /* An WND_SCALE option with the right option length. */
-          data = tcp_getoptbyte();
           pcb->snd_scale = data;
           if (pcb->snd_scale > 14U) {
             pcb->snd_scale = 14U;
