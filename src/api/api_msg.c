@@ -43,6 +43,7 @@
 #include "lwip/priv/api_msg.h"
 
 #include "lwip/ip.h"
+#include "lwip/ip_addr.h"
 #include "lwip/udp.h"
 #include "lwip/tcp.h"
 #include "lwip/raw.h"
@@ -176,14 +177,20 @@ recv_udp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
   LWIP_ASSERT("recv_udp must have a pcb argument", pcb != NULL);
   LWIP_ASSERT("recv_udp must have an argument", arg != NULL);
   conn = (struct netconn *)arg;
+
+  if (conn == NULL) {
+    pbuf_free(p);
+    return;
+  }
+
   LWIP_ASSERT("recv_udp: recv for wrong pcb!", conn->pcb.udp == pcb);
 
 #if LWIP_SO_RCVBUF
   SYS_ARCH_GET(conn->recv_avail, recv_avail);
-  if ((conn == NULL) || !sys_mbox_valid(&conn->recvmbox) ||
+  if (!sys_mbox_valid(&conn->recvmbox) ||
       ((recv_avail + (int)(p->tot_len)) > conn->recv_bufsize)) {
 #else  /* LWIP_SO_RCVBUF */
-  if ((conn == NULL) || !sys_mbox_valid(&conn->recvmbox)) {
+  if (!sys_mbox_valid(&conn->recvmbox)) {
 #endif /* LWIP_SO_RCVBUF */
     pbuf_free(p);
     return;
@@ -470,8 +477,6 @@ accept_function(void *arg, struct tcp_pcb *newpcb, err_t err)
   struct netconn *newconn;
   struct netconn *conn = (struct netconn *)arg;
 
-  LWIP_DEBUGF(API_MSG_DEBUG, ("accept_function: newpcb->tate: %s\n", tcp_debug_state_str(newpcb->state)));
-
   if (conn == NULL) {
     return ERR_VAL;
   }
@@ -488,6 +493,8 @@ accept_function(void *arg, struct tcp_pcb *newpcb, err_t err)
     }
     return ERR_VAL;
   }
+
+  LWIP_DEBUGF(API_MSG_DEBUG, ("accept_function: newpcb->tate: %s\n", tcp_debug_state_str(newpcb->state)));
 
   /* We have to set the callback here even though
    * the new socket is unknown. newconn->socket is marked as -1. */
@@ -544,21 +551,37 @@ accept_function(void *arg, struct tcp_pcb *newpcb, err_t err)
 static void
 pcb_new(struct api_msg *msg)
 {
-  LWIP_ASSERT("pcb_new: pcb already allocated", msg->conn->pcb.tcp == NULL);
+  enum lwip_ip_addr_type iptype = IPADDR_TYPE_V4;
 
+  LWIP_ASSERT("pcb_new: pcb already allocated", msg->conn->pcb.tcp == NULL);
+ 
+#if LWIP_IPV6 && LWIP_IPV4
+  /* IPv6: Dual-stack by default, unless netconn_set_ipv6only() is called */
+  if(NETCONNTYPE_ISIPV6(netconn_type(msg->conn))) {
+    iptype = IPADDR_TYPE_ANY;
+  }
+#endif
+  
   /* Allocate a PCB for this connection */
   switch(NETCONNTYPE_GROUP(msg->conn->type)) {
 #if LWIP_RAW
   case NETCONN_RAW:
-    msg->conn->pcb.raw = raw_new(msg->msg.n.proto);
+    msg->conn->pcb.raw = raw_new_ip_type(iptype, msg->msg.n.proto);
     if (msg->conn->pcb.raw != NULL) {
+#if LWIP_IPV6
+      /* ICMPv6 packets should always have checksum calculated by the stack as per RFC 3542 chapter 3.1 */
+      if (NETCONNTYPE_ISIPV6(msg->conn->type) && msg->conn->pcb.raw->protocol == IP6_NEXTH_ICMP6) {
+        msg->conn->pcb.raw->chksum_reqd = 1;
+        msg->conn->pcb.raw->chksum_offset = 2;
+      }
+#endif /* LWIP_IPV6 */
       raw_recv(msg->conn->pcb.raw, recv_raw, msg->conn);
     }
     break;
 #endif /* LWIP_RAW */
 #if LWIP_UDP
   case NETCONN_UDP:
-    msg->conn->pcb.udp = udp_new();
+    msg->conn->pcb.udp = udp_new_ip_type(iptype);
     if (msg->conn->pcb.udp != NULL) {
 #if LWIP_UDPLITE
       if (NETCONNTYPE_ISUDPLITE(msg->conn->type)) {
@@ -574,7 +597,7 @@ pcb_new(struct api_msg *msg)
 #endif /* LWIP_UDP */
 #if LWIP_TCP
   case NETCONN_TCP:
-    msg->conn->pcb.tcp = tcp_new();
+    msg->conn->pcb.tcp = tcp_new_ip_type(iptype);
     if (msg->conn->pcb.tcp != NULL) {
       setup_tcp(msg->conn);
     }
@@ -588,15 +611,6 @@ pcb_new(struct api_msg *msg)
   if (msg->conn->pcb.ip == NULL) {
     msg->err = ERR_MEM;
   }
-#if LWIP_IPV4 && LWIP_IPV6
-  else {
-    if (NETCONNTYPE_ISIPV6(msg->conn->type)) {
-      /* Convert IPv4 PCB manually to an IPv6 PCB */
-      IP_SET_TYPE_VAL(msg->conn->pcb.ip->local_ip,  IPADDR_TYPE_V6);
-      IP_SET_TYPE_VAL(msg->conn->pcb.ip->remote_ip, IPADDR_TYPE_V6);
-    }
-  }
-#endif /* LWIP_IPV4 && LWIP_IPV6 */
 }
 
 /**
@@ -1113,37 +1127,20 @@ lwip_netconn_do_bind(void *m)
   } else {
     msg->err = ERR_VAL;
     if (msg->conn->pcb.tcp != NULL) {
-      const ip_addr_t *ipaddr = API_EXPR_REF(msg->msg.bc.ipaddr);
-
-#if LWIP_IPV4 && LWIP_IPV6
-      /* "Socket API like" dual-stack support: If IP to bind to is IP6_ADDR_ANY,
-       * and NETCONN_FLAG_IPV6_V6ONLY is NOT set, use IP_ANY_TYPE to bind
-       */
-      if (ip_addr_cmp(ipaddr, IP6_ADDR_ANY) &&
-          (netconn_get_ipv6only(msg->conn) == 0)) {
-        /* change PCB type to IPADDR_TYPE_ANY */
-        IP_SET_TYPE_VAL(msg->conn->pcb.ip->local_ip,  IPADDR_TYPE_ANY);
-        IP_SET_TYPE_VAL(msg->conn->pcb.ip->remote_ip, IPADDR_TYPE_ANY);
-        
-        /* bind to IPADDR_TYPE_ANY */
-        ipaddr = IP_ANY_TYPE;
-      }
-#endif /* LWIP_IPV4 && LWIP_IPV6 */
-
       switch (NETCONNTYPE_GROUP(msg->conn->type)) {
 #if LWIP_RAW
       case NETCONN_RAW:
-        msg->err = raw_bind(msg->conn->pcb.raw, ipaddr);
+        msg->err = raw_bind(msg->conn->pcb.raw, API_EXPR_REF(msg->msg.bc.ipaddr));
         break;
 #endif /* LWIP_RAW */
 #if LWIP_UDP
       case NETCONN_UDP:
-        msg->err = udp_bind(msg->conn->pcb.udp, ipaddr, msg->msg.bc.port);
+        msg->err = udp_bind(msg->conn->pcb.udp, API_EXPR_REF(msg->msg.bc.ipaddr), msg->msg.bc.port);
         break;
 #endif /* LWIP_UDP */
 #if LWIP_TCP
       case NETCONN_TCP:
-        msg->err = tcp_bind(msg->conn->pcb.tcp, ipaddr, msg->msg.bc.port);
+        msg->err = tcp_bind(msg->conn->pcb.tcp, API_EXPR_REF(msg->msg.bc.ipaddr), msg->msg.bc.port);
         break;
 #endif /* LWIP_TCP */
       default:
@@ -1323,6 +1320,13 @@ lwip_netconn_do_listen(void *m)
             /* connection is not closed, cannot listen */
             msg->err = ERR_VAL;
           } else {
+            err_t err;
+            u8_t backlog;
+#if TCP_LISTEN_BACKLOG
+            backlog = msg->msg.lb.backlog;
+#else  /* TCP_LISTEN_BACKLOG */
+            backlog = TCP_DEFAULT_LISTEN_BACKLOG;
+#endif /* TCP_LISTEN_BACKLOG */
 #if LWIP_IPV4 && LWIP_IPV6
             /* "Socket API like" dual-stack support: If IP to listen to is IP6_ADDR_ANY,
              * and NETCONN_FLAG_IPV6_V6ONLY is NOT set, use IP_ANY_TYPE to listen
@@ -1335,15 +1339,11 @@ lwip_netconn_do_listen(void *m)
             }
 #endif /* LWIP_IPV4 && LWIP_IPV6 */
 
-#if TCP_LISTEN_BACKLOG
-            lpcb = tcp_listen_with_backlog(msg->conn->pcb.tcp, msg->msg.lb.backlog);
-#else  /* TCP_LISTEN_BACKLOG */
-            lpcb = tcp_listen(msg->conn->pcb.tcp);
-#endif /* TCP_LISTEN_BACKLOG */
+            lpcb = tcp_listen_with_backlog_and_err(msg->conn->pcb.tcp, backlog, &err);
 
             if (lpcb == NULL) {
               /* in this case, the old pcb is still allocated */
-              msg->err = ERR_MEM;
+              msg->err = err;
             } else {
               /* delete the recvmbox and allocate the acceptmbox */
               if (sys_mbox_valid(&msg->conn->recvmbox)) {
@@ -1400,7 +1400,7 @@ lwip_netconn_do_send(void *m)
       switch (NETCONNTYPE_GROUP(msg->conn->type)) {
 #if LWIP_RAW
       case NETCONN_RAW:
-        if (ip_addr_isany(&msg->msg.b->addr)) {
+        if (ip_addr_isany(&msg->msg.b->addr) || IP_IS_ANY_TYPE_VAL(msg->msg.b->addr)) {
           msg->err = raw_send(msg->conn->pcb.raw, msg->msg.b->p);
         } else {
           msg->err = raw_sendto(msg->conn->pcb.raw, msg->msg.b->p, &msg->msg.b->addr);
@@ -1588,10 +1588,11 @@ err_mem:
         write_finished = 1;
         conn->current_msg->msg.w.len = 0;
       }
-    } else if ((err == ERR_MEM) && !dontblock) {
-      /* If ERR_MEM, we wait for sent_tcp or poll_tcp to be called
-         we do NOT return to the application thread, since ERR_MEM is
-         only a temporary error! */
+    } else if (err == ERR_MEM) {
+      /* If ERR_MEM, we wait for sent_tcp or poll_tcp to be called.
+         For blocking sockets, we do NOT return to the application
+         thread, since ERR_MEM is only a temporary error! Non-blocking
+         will remain non-writable until sent_tcp/poll_tcp is called */
 
       /* tcp_write returned ERR_MEM, try tcp_output anyway */
       err_t out_err = tcp_output(conn->pcb.tcp);
@@ -1600,6 +1601,11 @@ err_mem:
            don't try writing any more but return the error
            to the application thread. */
         err = out_err;
+        write_finished = 1;
+        conn->current_msg->msg.w.len = 0;
+      } else if (dontblock) {
+        /* non-blocking write is done on ERR_MEM */
+        err = ERR_WOULDBLOCK;
         write_finished = 1;
         conn->current_msg->msg.w.len = 0;
       }
@@ -1710,6 +1716,7 @@ lwip_netconn_do_getaddr(void *m)
       ip_addr_copy(API_EXPR_DEREF(msg->msg.ad.ipaddr),
         msg->conn->pcb.ip->remote_ip);
     }
+
     msg->err = ERR_OK;
     switch (NETCONNTYPE_GROUP(msg->conn->type)) {
 #if LWIP_RAW
@@ -1783,25 +1790,28 @@ lwip_netconn_do_close(void *m)
 #if LWIP_NETCONN_FULLDUPLEX
       if (msg->msg.sd.shut & NETCONN_SHUT_WR) {
         /* close requested, abort running write */
-        sys_sem_t* op_completed_sem;
+        sys_sem_t* write_completed_sem;
         LWIP_ASSERT("msg->conn->current_msg != NULL", msg->conn->current_msg != NULL);
-        op_completed_sem = LWIP_API_MSG_SEM(msg->conn->current_msg);
+        write_completed_sem = LWIP_API_MSG_SEM(msg->conn->current_msg);
         msg->conn->current_msg->err = ERR_CLSD;
         msg->conn->current_msg = NULL;
         msg->conn->write_offset = 0;
         msg->conn->state = NETCONN_NONE;
+        state = NETCONN_NONE;
         NETCONN_SET_SAFE_ERR(msg->conn, ERR_CLSD);
-        sys_sem_signal(op_completed_sem);
+        sys_sem_signal(write_completed_sem);
       } else {
         LWIP_ASSERT("msg->msg.sd.shut == NETCONN_SHUT_RD", msg->msg.sd.shut == NETCONN_SHUT_RD);
         /* In this case, let the write continue and do not interfere with
            conn->current_msg or conn->state! */
         msg->err = tcp_shutdown(msg->conn->pcb.tcp, 1, 0);
       }
+    }
+    if (state == NETCONN_NONE) {
 #else /* LWIP_NETCONN_FULLDUPLEX */
       msg->err = ERR_INPROGRESS;
-#endif /* LWIP_NETCONN_FULLDUPLEX */
     } else {
+#endif /* LWIP_NETCONN_FULLDUPLEX */
       if (msg->msg.sd.shut & NETCONN_SHUT_RD) {
         /* Drain and delete mboxes */
         netconn_drain(msg->conn);

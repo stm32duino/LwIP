@@ -119,7 +119,7 @@ LWIP_MEMPOOL_DECLARE(PPPOE_IF, MEMP_NUM_PPPOE_INTERFACES, sizeof(struct pppoe_so
 /* callbacks called from PPP core */
 static err_t pppoe_write(ppp_pcb *ppp, void *ctx, struct pbuf *p);
 static err_t pppoe_netif_output(ppp_pcb *ppp, void *ctx, struct pbuf *p, u_short protocol);
-static err_t pppoe_connect(ppp_pcb *ppp, void *ctx);
+static void pppoe_connect(ppp_pcb *ppp, void *ctx);
 static void pppoe_disconnect(ppp_pcb *ppp, void *ctx);
 static err_t pppoe_destroy(ppp_pcb *ppp, void *ctx);
 
@@ -385,10 +385,7 @@ pppoe_disc_input(struct netif *netif, struct pbuf *pb)
 #endif
   struct pppoehdr *ph;
   struct pppoetag pt;
-  int off;
-#if defined(LWIP_DEBUG) && (LOG_DEBUG == LWIP_DBG_ON)
-	int err;
-#endif
+  int off, err;
   struct eth_hdr *ethhdr;
 
   /* don't do anything if there is not a single PPPoE instance */
@@ -605,14 +602,9 @@ breakbreak:;
       sys_untimeout(pppoe_timeout, sc);
       sc->sc_padr_retried = 0;
       sc->sc_state = PPPOE_STATE_PADR_SENT;
-#if defined(LWIP_DEBUG) && (LOG_DEBUG == LWIP_DBG_ON)
-      if ((err = pppoe_send_padr(sc)) != 0) 
-			{
+      if ((err = pppoe_send_padr(sc)) != 0) {
         PPPDEBUG(LOG_DEBUG, ("pppoe: %c%c%"U16_F": failed to send PADR, error=%d\n", sc->sc_ethif->name[0], sc->sc_ethif->name[1], sc->sc_ethif->num, err));
       }
-#else
-		pppoe_send_padr(sc);
-#endif 	/*defined(LWIP_DEBUG) && (DEBUG_LOG == LWIP_DEBUG_ON) */		
       sys_timeout(PPPOE_DISC_TIMEOUT * (1 + sc->sc_padr_retried), pppoe_timeout, sc);
       break;
     case PPPOE_CODE_PADS:
@@ -823,9 +815,7 @@ static void
 pppoe_timeout(void *arg)
 {
   u32_t retry_wait;
-#if defined(LWIP_DEBUG) && (LOG_DEBUG == LWIP_DBG_ON)
   int err;
-#endif
   struct pppoe_softc *sc = (struct pppoe_softc*)arg;
 
   PPPDEBUG(LOG_DEBUG, ("pppoe: %c%c%"U16_F": timeout\n", sc->sc_ethif->name[0], sc->sc_ethif->name[1], sc->sc_ethif->num));
@@ -858,14 +848,10 @@ pppoe_timeout(void *arg)
       }
       /* initialize for quick retry mode */
       retry_wait = LWIP_MIN(PPPOE_DISC_TIMEOUT * sc->sc_padi_retried, PPPOE_SLOW_RETRY);
-#if defined(LWIP_DEBUG) && (LOG_DEBUG == LWIP_DBG_ON)
       if ((err = pppoe_send_padi(sc)) != 0) {
         sc->sc_padi_retried--;
         PPPDEBUG(LOG_DEBUG, ("pppoe: %c%c%"U16_F": failed to transmit PADI, error=%d\n", sc->sc_ethif->name[0], sc->sc_ethif->name[1], sc->sc_ethif->num, err));
       }
-#else
-			pppoe_send_padi(sc);
-#endif
       sys_timeout(retry_wait, pppoe_timeout, sc);
       break;
 
@@ -875,24 +861,16 @@ pppoe_timeout(void *arg)
         MEMCPY(&sc->sc_dest, ethbroadcast.addr, sizeof(sc->sc_dest));
         sc->sc_state = PPPOE_STATE_PADI_SENT;
         sc->sc_padr_retried = 0;
-#if defined(LWIP_DEBUG) && (LOG_DEBUG == LWIP_DBG_ON)
         if ((err = pppoe_send_padi(sc)) != 0) {
           PPPDEBUG(LOG_DEBUG, ("pppoe: %c%c%"U16_F": failed to send PADI, error=%d\n", sc->sc_ethif->name[0], sc->sc_ethif->name[1], sc->sc_ethif->num, err));
         }
-#else
-				pppoe_send_padi(sc);
-#endif
         sys_timeout(PPPOE_DISC_TIMEOUT * (1 + sc->sc_padi_retried), pppoe_timeout, sc);
         return;
       }
-#if defined(LWIP_DEBUG) && (LOG_DEBUG == LWIP_DBG_ON)
       if ((err = pppoe_send_padr(sc)) != 0) {
         sc->sc_padr_retried--;
         PPPDEBUG(LOG_DEBUG, ("pppoe: %c%c%"U16_F": failed to send PADR, error=%d\n", sc->sc_ethif->name[0], sc->sc_ethif->name[1], sc->sc_ethif->num, err));
       }
-#else
-				pppoe_send_padr(sc);
-#endif			
       sys_timeout(PPPOE_DISC_TIMEOUT * (1 + sc->sc_padr_retried), pppoe_timeout, sc);
       break;
     default:
@@ -901,7 +879,7 @@ pppoe_timeout(void *arg)
 }
 
 /* Start a connection (i.e. initiate discovery phase) */
-static err_t
+static void
 pppoe_connect(ppp_pcb *ppp, void *ctx)
 {
   err_t err;
@@ -956,7 +934,6 @@ pppoe_connect(ppp_pcb *ppp, void *ctx)
     PPPDEBUG(LOG_DEBUG, ("pppoe: %c%c%"U16_F": failed to send PADI, error=%d\n", sc->sc_ethif->name[0], sc->sc_ethif->name[1], sc->sc_ethif->num, err));
   }
   sys_timeout(PPPOE_DISC_TIMEOUT, pppoe_timeout, sc);
-  return err;
 }
 
 /* disconnect */

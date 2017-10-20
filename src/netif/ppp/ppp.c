@@ -275,8 +275,8 @@ err_t ppp_connect(ppp_pcb *pcb, u16_t holdoff) {
   PPPDEBUG(LOG_DEBUG, ("ppp_connect[%d]: holdoff=%d\n", pcb->netif->num, holdoff));
 
   if (holdoff == 0) {
-    new_phase(pcb, PPP_PHASE_INITIALIZE);
-    return pcb->link_cb->connect(pcb, pcb->link_ctx_cb);
+    ppp_do_connect(pcb);
+    return ERR_OK;
   }
 
   new_phase(pcb, PPP_PHASE_HOLDOFF);
@@ -302,7 +302,8 @@ err_t ppp_listen(ppp_pcb *pcb) {
 
   if (pcb->link_cb->listen) {
     new_phase(pcb, PPP_PHASE_INITIALIZE);
-    return pcb->link_cb->listen(pcb, pcb->link_ctx_cb);
+    pcb->link_cb->listen(pcb, pcb->link_ctx_cb);
+    return ERR_OK;
   }
   return ERR_IF;
 }
@@ -1145,12 +1146,12 @@ int cdns(ppp_pcb *pcb, u32_t ns1, u32_t ns2) {
   nsa = dns_getserver(0);
   ip_addr_set_ip4_u32(&nsb, ns1);
   if (ip_addr_cmp(nsa, &nsb)) {
-    dns_setserver(0, IP4_ADDR_ANY);
+    dns_setserver(0, IP_ADDR_ANY);
   }
   nsa = dns_getserver(1);
   ip_addr_set_ip4_u32(&nsb, ns2);
   if (ip_addr_cmp(nsa, &nsb)) {
-    dns_setserver(1, IP4_ADDR_ANY);
+    dns_setserver(1, IP_ADDR_ANY);
   }
   return 1;
 }
