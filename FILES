@@ -1,5 +1,10 @@
-src/      - The source code for the lwIP TCP/IP stack.
-doc/      - The documentation for lwIP.
-test/     - Some code to test whether the sources do what they should.
+api/      - The code for the high-level wrapper API. Not needed if
+            you use the lowel-level call-back/raw API.
 
-See also the FILES file in each subdirectory.
+core/     - The core of the TPC/IP stack; protocol implementations,
+            memory and buffer management, and the low-level raw API.
+
+netif/    - Generic network interface device drivers are kept here.
+
+For more information on the various subdirectories, check the FILES
+file in each directory.
