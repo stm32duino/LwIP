@@ -7,4 +7,4 @@
 
 ## Version
 
-This library is based on the version 2.0.3 of the LwIP stack.
+This library is based on the version 2.1.2 of the LwIP stack.
