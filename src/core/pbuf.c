@@ -271,7 +271,7 @@ pbuf_alloc(pbuf_layer layer, u16_t length, pbuf_type type)
       break;
     }
     case PBUF_RAM: {
-      u16_t payload_len = (u16_t)(LWIP_MEM_ALIGN_SIZE(offset) + LWIP_MEM_ALIGN_SIZE(length));
+      mem_size_t payload_len = (mem_size_t)(LWIP_MEM_ALIGN_SIZE(offset) + LWIP_MEM_ALIGN_SIZE(length));
       mem_size_t alloc_len = (mem_size_t)(LWIP_MEM_ALIGN_SIZE(SIZEOF_STRUCT_PBUF) + payload_len);
 
       /* bug #50040: Check for integer overflow when calculating alloc_len */
@@ -705,7 +705,6 @@ pbuf_free_header(struct pbuf *q, u16_t size)
  * @return the number of pbufs that were de-allocated
  * from the head of the chain.
  *
- * @note MUST NOT be called on a packet queue (Not verified to work yet).
  * @note the reference counter of a pbuf equals the number of pointers
  * that refer to the pbuf (or into the pbuf).
  *
@@ -941,12 +940,7 @@ pbuf_dechain(struct pbuf *p)
 
 /**
  * @ingroup pbuf
- * Create PBUF_RAM copies of pbufs.
- *
- * Used to queue packets on behalf of the lwIP stack, such as
- * ARP based queueing.
- *
- * @note You MUST explicitly use p = pbuf_take(p);
+ * Copy the contents of one packet buffer into another.
  *
  * @note Only one packet is copied, no packet queue!
  *
@@ -956,18 +950,49 @@ pbuf_dechain(struct pbuf *p)
  * @return ERR_OK if pbuf was copied
  *         ERR_ARG if one of the pbufs is NULL or p_to is not big
  *                 enough to hold p_from
+ *         ERR_VAL if any of the pbufs are part of a queue
  */
 err_t
 pbuf_copy(struct pbuf *p_to, const struct pbuf *p_from)
 {
-  size_t offset_to = 0, offset_from = 0, len;
-
   LWIP_DEBUGF(PBUF_DEBUG | LWIP_DBG_TRACE, ("pbuf_copy(%p, %p)\n",
               (const void *)p_to, (const void *)p_from));
 
+  LWIP_ERROR("pbuf_copy: invalid source", p_from != NULL, return ERR_ARG;);
+  return pbuf_copy_partial_pbuf(p_to, p_from, p_from->tot_len, 0);
+}
+
+/**
+ * @ingroup pbuf
+ * Copy part or all of one packet buffer into another, to a specified offset.
+ *
+ * @note Only data in one packet is copied, no packet queue!
+ * @note Argument order is shared with pbuf_copy, but different than pbuf_copy_partial.
+ *
+ * @param p_to pbuf destination of the copy
+ * @param p_from pbuf source of the copy
+ * @param copy_len number of bytes to copy
+ * @param offset offset in destination pbuf where to copy to
+ *
+ * @return ERR_OK if copy_len bytes were copied
+ *         ERR_ARG if one of the pbufs is NULL or p_from is shorter than copy_len
+ *                 or p_to is not big enough to hold copy_len at offset
+ *         ERR_VAL if any of the pbufs are part of a queue
+ */
+err_t
+pbuf_copy_partial_pbuf(struct pbuf *p_to, const struct pbuf *p_from, u16_t copy_len, u16_t offset)
+{
+  size_t offset_to = offset, offset_from = 0, len;
+
+  LWIP_DEBUGF(PBUF_DEBUG | LWIP_DBG_TRACE, ("pbuf_copy_partial_pbuf(%p, %p, %"U16_F", %"U16_F")\n",
+              (const void *)p_to, (const void *)p_from, copy_len, offset));
+
+  /* is the copy_len in range? */
+  LWIP_ERROR("pbuf_copy_partial_pbuf: copy_len bigger than source", ((p_from != NULL) &&
+             (p_from->tot_len >= copy_len)), return ERR_ARG;);
   /* is the target big enough to hold the source? */
-  LWIP_ERROR("pbuf_copy: target not big enough to hold source", ((p_to != NULL) &&
-             (p_from != NULL) && (p_to->tot_len >= p_from->tot_len)), return ERR_ARG;);
+  LWIP_ERROR("pbuf_copy_partial_pbuf: target not big enough", ((p_to != NULL) &&
+             (p_to->tot_len >= (offset + copy_len))), return ERR_ARG;);
 
   /* iterate through pbuf chain */
   do {
@@ -979,35 +1004,38 @@ pbuf_copy(struct pbuf *p_to, const struct pbuf *p_from)
       /* current p_from does not fit into current p_to */
       len = p_to->len - offset_to;
     }
+    len = LWIP_MIN(copy_len, len);
     MEMCPY((u8_t *)p_to->payload + offset_to, (u8_t *)p_from->payload + offset_from, len);
     offset_to += len;
     offset_from += len;
+    copy_len -= len;
     LWIP_ASSERT("offset_to <= p_to->len", offset_to <= p_to->len);
     LWIP_ASSERT("offset_from <= p_from->len", offset_from <= p_from->len);
     if (offset_from >= p_from->len) {
       /* on to next p_from (if any) */
       offset_from = 0;
       p_from = p_from->next;
+      LWIP_ERROR("p_from != NULL", (p_from != NULL) || (copy_len == 0), return ERR_ARG;);
     }
     if (offset_to == p_to->len) {
       /* on to next p_to (if any) */
       offset_to = 0;
       p_to = p_to->next;
-      LWIP_ERROR("p_to != NULL", (p_to != NULL) || (p_from == NULL), return ERR_ARG;);
+      LWIP_ERROR("p_to != NULL", (p_to != NULL) || (copy_len == 0), return ERR_ARG;);
     }
 
     if ((p_from != NULL) && (p_from->len == p_from->tot_len)) {
       /* don't copy more than one packet! */
-      LWIP_ERROR("pbuf_copy() does not allow packet queues!",
+      LWIP_ERROR("pbuf_copy_partial_pbuf() does not allow packet queues!",
                  (p_from->next == NULL), return ERR_VAL;);
     }
     if ((p_to != NULL) && (p_to->len == p_to->tot_len)) {
       /* don't copy more than one packet! */
-      LWIP_ERROR("pbuf_copy() does not allow packet queues!",
+      LWIP_ERROR("pbuf_copy_partial_pbuf() does not allow packet queues!",
                  (p_to->next == NULL), return ERR_VAL;);
     }
-  } while (p_from);
-  LWIP_DEBUGF(PBUF_DEBUG | LWIP_DBG_TRACE, ("pbuf_copy: end of chain reached.\n"));
+  } while (copy_len);
+  LWIP_DEBUGF(PBUF_DEBUG | LWIP_DBG_TRACE, ("pbuf_copy_partial_pbuf: copy complete.\n"));
   return ERR_OK;
 }
 

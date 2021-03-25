@@ -1,0 +1,37 @@
+{
+"name": "STM32duino LwIP",
+"keywords": "LwIP",
+"description": "lwIP is a small independent implementation of the TCP/IP protocol suite that has been developed by Adam Dunkels at the Computer and Networks Architectures (CNA) lab at the Swedish Institute of Computer Science (SICS). The focus of the lwIP TCP/IP implementation is to reduce the RAM usage while still having a full scale TCP. This making lwIP suitable for use in embedded systems with tens of kilobytes of free RAM and room for around 40 kilobytes of code ROM. Note: modified by ST.",
+"frameworks": "arduino",
+"platforms": "ststm32",
+"license": "BSD",
+"repository": {
+  "type": "git",
+  "url": "https://git.savannah.gnu.org/cgit/lwip.git"
+},
+"authors": {
+    "name": "Adam Dunkels",
+    "email": "adam@sics.se"
+},
+"build": { 
+  "flags" : [
+    "-I src",
+    "-I src/api",
+    "-I src/compat",
+    "-I src/core",
+    "-I src/core/ipv4",
+    "-I src/core/ipv6",
+    "-I src/lwip",
+    "-I src/lwip/apps",
+    "-I src/lwip/apps/sntp",
+    "-I src/lwip/priv",
+    "-I src/lwip/prot",
+    "-I src/netif",
+    "-I src/netif/ppp",
+    "-I $PROJECT_DIR/include"
+   ]
+},
+"version": "2.2.0-dev",
+"frameworks": "arduino",
+"platforms": "*"
+}

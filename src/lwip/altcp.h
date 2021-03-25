@@ -1,6 +1,6 @@
 /**
  * @file
- * Application layered TCP connection API (to be used from TCPIP thread)\n
+ * Application layered TCP connection API (to be used from TCPIP thread)
  *
  * This file contains the generic API.
  * For more details see @ref altcp_api.
@@ -128,6 +128,11 @@ void  altcp_setprio(struct altcp_pcb *conn, u8_t prio);
 err_t altcp_get_tcp_addrinfo(struct altcp_pcb *conn, int local, ip_addr_t *addr, u16_t *port);
 ip_addr_t *altcp_get_ip(struct altcp_pcb *conn, int local);
 u16_t altcp_get_port(struct altcp_pcb *conn, int local);
+
+#if LWIP_TCP_KEEPALIVE
+void  altcp_keepalive_disable(struct altcp_pcb *conn);
+void  altcp_keepalive_enable(struct altcp_pcb *conn, u32_t idle, u32_t intvl, u32_t count);
+#endif
 
 #ifdef LWIP_DEBUG
 enum tcp_state altcp_dbg_get_tcp_state(struct altcp_pcb *conn);

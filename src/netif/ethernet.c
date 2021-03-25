@@ -67,7 +67,7 @@ const struct eth_addr ethzero = {{0, 0, 0, 0, 0, 0}};
  * @ingroup lwip_nosys
  * Process received ethernet frames. Using this function instead of directly
  * calling ip_input and passing ARP frames through etharp in ethernetif_input,
- * the ARP cache is protected from concurrent access.\n
+ * the ARP cache is protected from concurrent access.<br>
  * Don't call directly, pass to netif_add() and call netif->input().
  *
  * @param p the received packet, p->payload pointing to the ethernet header
@@ -273,8 +273,16 @@ ethernet_output(struct netif * netif, struct pbuf * p,
   struct eth_hdr *ethhdr;
   u16_t eth_type_be = lwip_htons(eth_type);
 
-#if ETHARP_SUPPORT_VLAN && defined(LWIP_HOOK_VLAN_SET)
-  s32_t vlan_prio_vid = LWIP_HOOK_VLAN_SET(netif, p, src, dst, eth_type);
+#if ETHARP_SUPPORT_VLAN && (defined(LWIP_HOOK_VLAN_SET) || LWIP_VLAN_PCP)
+  s32_t vlan_prio_vid;
+#ifdef LWIP_HOOK_VLAN_SET
+  vlan_prio_vid = LWIP_HOOK_VLAN_SET(netif, p, src, dst, eth_type);
+#elif LWIP_VLAN_PCP
+  vlan_prio_vid = -1;
+  if (netif->hints && (netif->hints->tci >= 0)) {
+    vlan_prio_vid = (u16_t)netif->hints->tci;
+  }
+#endif
   if (vlan_prio_vid >= 0) {
     struct eth_vlan_hdr *vlanhdr;
 
@@ -289,7 +297,7 @@ ethernet_output(struct netif * netif, struct pbuf * p,
 
     eth_type_be = PP_HTONS(ETHTYPE_VLAN);
   } else
-#endif /* ETHARP_SUPPORT_VLAN && defined(LWIP_HOOK_VLAN_SET) */
+#endif /* ETHARP_SUPPORT_VLAN && (defined(LWIP_HOOK_VLAN_SET) || LWIP_VLAN_PCP) */
   {
     if (pbuf_add_header(p, SIZEOF_ETH_HDR) != 0) {
       goto pbuf_header_failed;

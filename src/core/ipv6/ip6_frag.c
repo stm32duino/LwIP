@@ -166,7 +166,7 @@ ip6_reass_free_complete_datagram(struct ip6_reassdata *ipr)
     /* Then, move back to the original ipv6 header (we are now pointing to Fragment header).
        This cannot fail since we already checked when receiving this fragment. */
     if (pbuf_header_force(p, (s16_t)((u8_t*)p->payload - (u8_t*)ipr->iphdr))) {
-      LWIP_ASSERT("ip6_reass_free: moving p->payload to ip6 header failed\n", 0);
+      LWIP_ASSERT("ip6_reass_free: moving p->payload to ip6 header failed", 0);
     }
     else {
       /* Reconstruct the zoned source and destination addresses, so that we do
@@ -320,8 +320,8 @@ ip6_reass(struct pbuf *p)
        in the reassembly buffer. If so, we proceed with copying the
        fragment into the buffer. */
     if ((frag_hdr->_identification == ipr->identification) &&
-        ip6_addr_cmp_packed(ip6_current_src_addr(), &(IPV6_FRAG_SRC(ipr)), ipr->src_zone) &&
-        ip6_addr_cmp_packed(ip6_current_dest_addr(), &(IPV6_FRAG_DEST(ipr)), ipr->dest_zone)) {
+        ip6_addr_packed_eq(ip6_current_src_addr(), &(IPV6_FRAG_SRC(ipr)), ipr->src_zone) &&
+        ip6_addr_packed_eq(ip6_current_dest_addr(), &(IPV6_FRAG_DEST(ipr)), ipr->dest_zone)) {
       IP6_FRAG_STATS_INC(ip6_frag.cachehit);
       break;
     }
@@ -652,7 +652,7 @@ ip6_reass(struct pbuf *p)
 
     /* Move pbuf back to IPv6 header. This should never fail. */
     if (pbuf_header_force(p, (s16_t)((u8_t*)p->payload - (u8_t*)iphdr_ptr))) {
-      LWIP_ASSERT("ip6_reass: moving p->payload to ip6 header failed\n", 0);
+      LWIP_ASSERT("ip6_reass: moving p->payload to ip6 header failed", 0);
       pbuf_free(p);
       return NULL;
     }
@@ -781,7 +781,7 @@ ip6_frag(struct pbuf *p, struct netif *netif, const ip6_addr_t *dest)
       return ERR_MEM;
     }
     LWIP_ASSERT("this needs a pbuf in one piece!",
-                (p->len >= (IP6_HLEN)));
+                (rambuf->len >= (IP6_HLEN)));
     SMEMCPY(rambuf->payload, original_ip6hdr, IP6_HLEN);
     ip6hdr = (struct ip6_hdr *)rambuf->payload;
     frag_hdr = (struct ip6_frag_hdr *)((u8_t*)rambuf->payload + IP6_HLEN);
