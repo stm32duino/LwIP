@@ -348,10 +348,6 @@ netif_add(struct netif *netif,
 #if LWIP_IPV6 && LWIP_IPV6_MLD
   netif->mld_mac_filter = NULL;
 #endif /* LWIP_IPV6 && LWIP_IPV6_MLD */
-#if ENABLE_LOOPBACK
-  netif->loop_first = NULL;
-  netif->loop_last = NULL;
-#endif /* ENABLE_LOOPBACK */
 
   /* remember netif specific state information data */
   netif->state = state;
@@ -359,9 +355,16 @@ netif_add(struct netif *netif,
   netif->input = input;
 
   NETIF_RESET_HINTS(netif);
-#if ENABLE_LOOPBACK && LWIP_LOOPBACK_MAX_PBUFS
+#if ENABLE_LOOPBACK
+  netif->loop_first = NULL;
+  netif->loop_last = NULL;
+#if LWIP_LOOPBACK_MAX_PBUFS
   netif->loop_cnt_current = 0;
-#endif /* ENABLE_LOOPBACK && LWIP_LOOPBACK_MAX_PBUFS */
+#endif /* LWIP_LOOPBACK_MAX_PBUFS */
+#if LWIP_NETIF_LOOPBACK_MULTITHREADING
+  netif->reschedule_poll = 0;
+#endif /* LWIP_NETIF_LOOPBACK_MULTITHREADING */
+#endif /* ENABLE_LOOPBACK */
 
 #if LWIP_IPV4
   netif_set_addr(netif, ipaddr, netmask, gw);
@@ -1031,6 +1034,10 @@ netif_set_link_down(struct netif *netif)
 
   if (netif->flags & NETIF_FLAG_LINK_UP) {
     netif_clear_flags(netif, NETIF_FLAG_LINK_UP);
+#if LWIP_IPV6 && LWIP_ND6_ALLOW_RA_UPDATES
+    netif->mtu6 = netif->mtu;
+#endif
+
     NETIF_LINK_CALLBACK(netif);
 #if LWIP_NETIF_EXT_STATUS_CALLBACK
     {
@@ -1062,11 +1069,12 @@ netif_set_link_callback(struct netif *netif, netif_status_callback_fn link_callb
 /**
  * @ingroup netif
  * Send an IP packet to be received on the same netif (loopif-like).
- * The pbuf is simply copied and handed back to netif->input.
- * In multithreaded mode, this is done directly since netif->input must put
- * the packet on a queue.
- * In callback mode, the packet is put on an internal queue and is fed to
+ * The pbuf is copied and added to an internal queue which is fed to 
  * netif->input by netif_poll().
+ * In multithreaded mode, the call to netif_poll() is queued to be done on the
+ * TCP/IP thread.
+ * In callback mode, the user has the responsibility to call netif_poll() in 
+ * the main loop of their application.
  *
  * @param netif the lwip network interface structure
  * @param p the (IP) packet to 'send'
@@ -1143,6 +1151,12 @@ netif_loop_output(struct netif *netif, struct pbuf *p)
     LWIP_ASSERT("if first != NULL, last must also be != NULL", netif->loop_last != NULL);
     netif->loop_last->next = r;
     netif->loop_last = last;
+#if LWIP_NETIF_LOOPBACK_MULTITHREADING
+    if (netif->reschedule_poll) {
+      schedule_poll = 1;
+      netif->reschedule_poll = 0;
+    }
+#endif /* LWIP_NETIF_LOOPBACK_MULTITHREADING */
   } else {
     netif->loop_first = r;
     netif->loop_last = last;
@@ -1160,7 +1174,11 @@ netif_loop_output(struct netif *netif, struct pbuf *p)
 #if LWIP_NETIF_LOOPBACK_MULTITHREADING
   /* For multithreading environment, schedule a call to netif_poll */
   if (schedule_poll) {
-    tcpip_try_callback((tcpip_callback_fn)netif_poll, netif);
+    if (tcpip_try_callback((tcpip_callback_fn)netif_poll, netif) != ERR_OK) {
+      SYS_ARCH_PROTECT(lev);
+      netif->reschedule_poll = 1;
+      SYS_ARCH_UNPROTECT(lev);
+    }
   }
 #endif /* LWIP_NETIF_LOOPBACK_MULTITHREADING */
 
@@ -1710,6 +1728,10 @@ netif_find(const char *name)
   }
 
   num = (u8_t)atoi(&name[2]);
+  if (!num && (name[2] != '0')) {
+    /* this means atoi has failed */
+    return NULL;
+  }
 
   NETIF_FOREACH(netif) {
     if (num == netif->num &&

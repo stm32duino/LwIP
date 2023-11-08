@@ -46,6 +46,18 @@
   *
   ******************************************************************************
   @endverbatim
+
+### 18-August-2023 ###
+========================
+  + Add LICENSE.md file at the root directory.
+
+### 19-May-2023 ###
+========================
+  + Upgrade to use LwIP V2.1.3 version
+     - For more details about new features and bug fixes please refer to CHANGELOG.txt and UPGRADING files.
+  + sys_arch.c:
+     - Remove support of the cmsis_os1 API and keep only cmsis_os2.
+
 ### 15-March-2019 ###
 ========================
   + Upgrade to use LwIP V2.1.2 version
