@@ -688,7 +688,6 @@ lwip_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
     err = netconn_peer(newconn, &naddr, &port);
     if (err != ERR_OK) {
       LWIP_DEBUGF(SOCKETS_DEBUG, ("lwip_accept(%d): netconn_peer failed, err=%d\n", s, err));
-      netconn_delete(newconn);
       free_socket(nsock, 1);
       sock_set_errno(sock, err_to_errno(err));
       done_socket(sock);
@@ -2073,7 +2072,9 @@ lwip_select(int maxfdp1, fd_set *readset, fd_set *writeset, fd_set *exceptset,
         /* Call lwip_selscan again: there could have been events between
            the last scan (without us on the list) and putting us on the list! */
         nready = lwip_selscan(maxfdp1, readset, writeset, exceptset, &lreadset, &lwriteset, &lexceptset);
-        if (!nready) {
+        if (nready < 0) {
+          set_errno(EBADF);
+        } else if (!nready) {
           /* Still none ready, just wait to be woken */
           if (timeout == 0) {
             /* Wait forever */
@@ -2102,7 +2103,8 @@ lwip_select(int maxfdp1, fd_set *readset, fd_set *writeset, fd_set *exceptset,
             (exceptset && FD_ISSET(i, exceptset))) {
           struct lwip_sock *sock;
           SYS_ARCH_PROTECT(lev);
-          sock = tryget_socket_unconn_locked(i);
+          sock = tryget_socket_unconn_nouse(i);
+          LWIP_ASSERT("socket gone at the end of select", sock != NULL);
           if (sock != NULL) {
             /* for now, handle select_waiting==0... */
             LWIP_ASSERT("sock->select_waiting > 0", sock->select_waiting > 0);
@@ -2110,7 +2112,6 @@ lwip_select(int maxfdp1, fd_set *readset, fd_set *writeset, fd_set *exceptset,
               sock->select_waiting--;
             }
             SYS_ARCH_UNPROTECT(lev);
-            done_socket(sock);
           } else {
             SYS_ARCH_UNPROTECT(lev);
             /* Not a valid socket */
@@ -2147,6 +2148,11 @@ lwip_select(int maxfdp1, fd_set *readset, fd_set *writeset, fd_set *exceptset,
         /* See what's set now after waiting */
         nready = lwip_selscan(maxfdp1, readset, writeset, exceptset, &lreadset, &lwriteset, &lexceptset);
         LWIP_DEBUGF(SOCKETS_DEBUG, ("lwip_select: nready=%d\n", nready));
+        if (nready < 0) {
+          set_errno(EBADF);
+          lwip_select_dec_sockets_used(maxfdp1, &used_sockets);
+          return -1;
+        }
       }
     }
   }

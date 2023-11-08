@@ -693,11 +693,11 @@ nd6_input(struct pbuf *p, struct netif *inp)
         }
         mtu_opt = (struct mtu_option *)buffer;
         mtu32 = lwip_htonl(mtu_opt->mtu);
-        if ((mtu32 >= 1280) && (mtu32 <= 0xffff)) {
+        if ((mtu32 >= IP6_MIN_MTU_LENGTH) && (mtu32 <= 0xffff)) {
 #if LWIP_ND6_ALLOW_RA_UPDATES
           if (inp->mtu) {
             /* don't set the mtu for IPv6 higher than the netif driver supports */
-            inp->mtu6 = LWIP_MIN(inp->mtu, (u16_t)mtu32);
+            inp->mtu6 = LWIP_MIN(LWIP_MIN(inp->mtu, inp->mtu6), (u16_t)mtu32);
           } else {
             inp->mtu6 = (u16_t)mtu32;
           }
@@ -766,7 +766,7 @@ nd6_input(struct pbuf *p, struct netif *inp)
 
         rdnss_opt = (struct rdnss_option *)buffer;
         num = (rdnss_opt->length - 1) / 2;
-        for (n = 0; (rdnss_server_idx < DNS_MAX_SERVERS) && (n < num); n++) {
+        for (n = 0; (rdnss_server_idx < DNS_MAX_SERVERS) && (n < num); n++, copy_offset += sizeof(ip6_addr_p_t)) {
           ip_addr_t rdnss_address;
 
           /* Copy directly from pbuf to get an aligned, zoned copy of the prefix. */
@@ -1182,15 +1182,27 @@ nd6_send_ns(struct netif *netif, const ip6_addr_t *target_addr, u8_t flags)
 {
   struct ns_header *ns_hdr;
   struct pbuf *p;
-  const ip6_addr_t *src_addr;
+  const ip6_addr_t *src_addr = NULL;
   u16_t lladdr_opt_len;
 
   LWIP_ASSERT("target address is required", target_addr != NULL);
 
-  if (!(flags & ND6_SEND_FLAG_ANY_SRC) &&
-      ip6_addr_isvalid(netif_ip6_addr_state(netif,0))) {
-    /* Use link-local address as source address. */
-    src_addr = netif_ip6_addr(netif, 0);
+  if (!(flags & ND6_SEND_FLAG_ANY_SRC)) {
+    int i;
+    for (i = 0; i < LWIP_IPV6_NUM_ADDRESSES; i++) {
+      if (ip6_addr_isvalid(netif_ip6_addr_state(netif, i)) &&
+            ip6_addr_netcmp(target_addr, netif_ip6_addr(netif, i))) {
+        src_addr = netif_ip6_addr(netif, i);
+        break;
+      }
+    }
+
+    if (i == LWIP_IPV6_NUM_ADDRESSES) {
+      LWIP_DEBUGF(IP6_DEBUG | LWIP_DBG_LEVEL_WARNING, ("ICMPv6 NS: no available src address\n"));
+      ND6_STATS_INC(nd6.err);
+      return;
+    }
+
     /* calculate option length (in 8-byte-blocks) */
     lladdr_opt_len = ((netif->hwaddr_len + 2) + 7) >> 3;
   } else {
@@ -2300,7 +2312,7 @@ nd6_get_destination_mtu(const ip6_addr_t *ip6addr, struct netif *netif)
     return netif_mtu6(netif);
   }
 
-  return 1280; /* Minimum MTU */
+  return IP6_MIN_MTU_LENGTH; /* Minimum MTU */
 }
 
 
