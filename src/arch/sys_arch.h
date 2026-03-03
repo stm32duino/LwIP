@@ -48,7 +48,7 @@ extern "C" {
 #define SYS_SEM_NULL  (osSemaphoreId_t)0
 
 typedef osSemaphoreId_t     sys_sem_t;
-typedef osSemaphoreId_t     sys_mutex_t;
+typedef osMutexId_t         sys_mutex_t;
 typedef osMessageQueueId_t  sys_mbox_t;
 typedef osThreadId_t        sys_thread_t;
 
