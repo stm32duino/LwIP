@@ -117,7 +117,7 @@ lowpan6_context_lookup(const ip6_addr_t *lowpan6_contexts, const ip6_addr_t *ip6
   s8_t i;
 
   for (i = 0; i < LWIP_6LOWPAN_NUM_CONTEXTS; i++) {
-    if (ip6_addr_netcmp(&lowpan6_contexts[i], ip6addr)) {
+    if (ip6_addr_net_eq(&lowpan6_contexts[i], ip6addr)) {
       return i;
     }
   }
@@ -424,13 +424,13 @@ lowpan6_decompress_hdr(u8_t *lowpan6_buffer, size_t lowpan6_bufsize,
       }
       LWIP_DEBUGF(LWIP_LOWPAN6_IP_COMPRESSED_DEBUG, ("%2X ", lowpan6_buffer[j]));
     }
-    LWIP_DEBUGF(LWIP_LOWPAN6_IP_COMPRESSED_DEBUG, ("\np->len: %d", lowpan6_bufsize));
+    LWIP_DEBUGF(LWIP_LOWPAN6_IP_COMPRESSED_DEBUG, ("\np->len: %d\n", lowpan6_bufsize));
   }
 #endif
 
   /* offset for inline IP headers (RFC 6282 ch3)*/
   lowpan6_offset = 2;
-  /* if CID is set (context identifier), the context byte 
+  /* if CID is set (context identifier), the context byte
    * follows immediately after the header, so other IPHC fields are @+3 */
   if (lowpan6_buffer[1] & 0x80) {
     lowpan6_offset++;
@@ -523,7 +523,7 @@ lowpan6_decompress_hdr(u8_t *lowpan6_buffer, size_t lowpan6_bufsize,
       lowpan6_offset += 2;
     } else if ((lowpan6_buffer[1] & 0x30) == 0x30) {
       LWIP_DEBUGF(LWIP_LOWPAN6_DECOMPRESSION_DEBUG, ("SAM == 11, src compression, 0bits inline, using other headers\n"));
-      /* no information avalaible, using other layers, see RFC6282 ch 3.2.2 */
+      /* no information available, using other layers, see RFC6282 ch 3.2.2 */
       ip6hdr->src.addr[0] = PP_HTONL(0xfe800000UL);
       ip6hdr->src.addr[1] = 0;
       if (src->addr_len == 2) {
@@ -667,7 +667,7 @@ lowpan6_decompress_hdr(u8_t *lowpan6_buffer, size_t lowpan6_bufsize,
 
     /* M=0, DAC=0, determining destination address length via DAM=xx */
     if ((lowpan6_buffer[1] & 0x03) == 0x00) {
-      LWIP_DEBUGF(LWIP_LOWPAN6_DECOMPRESSION_DEBUG, ("DAM == 00, no dst compression, fetching 128bits inline"));
+      LWIP_DEBUGF(LWIP_LOWPAN6_DECOMPRESSION_DEBUG, ("DAM == 00, no dst compression, fetching 128bits inline\n"));
       /* DAM=00, copy full address */
       MEMCPY(&ip6hdr->dest.addr[0], lowpan6_buffer + lowpan6_offset, 16);
       lowpan6_offset += 16;

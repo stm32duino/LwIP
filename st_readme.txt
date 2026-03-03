@@ -1,51 +1,45 @@
 
   @verbatim
   ******************************************************************************
-  *  
-  *           Portions COPYRIGHT 2016 STMicroelectronics                       
-  *           Copyright (c) 2001-2004 Swedish Institute of Computer Science, All rights reserved.
-  *                                                                      
   * @file    st_readme.txt 
-  * @author  MCD Application Team
+  * @author  GPAM Application Team
   * @brief   This file lists the main modification done by STMicroelectronics on
   *          LwIP for integration with STM32Cube solution.
   *          For more details on LwIP implementation on STM32Cube, please refer 
-  *          to UM1713 "Developing applications on STM32Cube with LwIP TCP/IP stack"  
+  *          to UM1713 "Developing applications on STM32Cube with LwIP TCP/IP stack"
   ******************************************************************************
+  * @attention
   *
-  * Redistribution and use in source and binary forms, with or without 
-  * modification, are permitted, provided that the following conditions are met:
+  * Portions Copyright (c) 2016-2025 STMicroelectronics, All rights reserved.
+  * Copyright (c) 2001-2004 Swedish Institute of Computer Science, All rights reserved.
   *
-  * 1. Redistribution of source code must retain the above copyright notice, 
-  *    this list of conditions and the following disclaimer.
-  * 2. Redistributions in binary form must reproduce the above copyright notice,
-  *    this list of conditions and the following disclaimer in the documentation
-  *    and/or other materials provided with the distribution.
-  * 3. Neither the name of STMicroelectronics nor the names of other 
-  *    contributors to this software may be used to endorse or promote products 
-  *    derived from this software without specific written permission.
-  * 4. This software, including modifications and/or derivative works of this 
-  *    software, must execute solely and exclusively on microcontroller or
-  *    microprocessor devices manufactured by or for STMicroelectronics.
-  * 5. Redistribution and use of this software other than as permitted under 
-  *    this license is void and will automatically terminate your rights under 
-  *    this license. 
-  *
-  * THIS SOFTWARE IS PROVIDED BY STMICROELECTRONICS AND CONTRIBUTORS "AS IS" 
-  * AND ANY EXPRESS, IMPLIED OR STATUTORY WARRANTIES, INCLUDING, BUT NOT 
-  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
-  * PARTICULAR PURPOSE AND NON-INFRINGEMENT OF THIRD PARTY INTELLECTUAL PROPERTY
-  * RIGHTS ARE DISCLAIMED TO THE FULLEST EXTENT PERMITTED BY LAW. IN NO EVENT 
-  * SHALL STMICROELECTRONICS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-  * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-  * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, 
-  * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF 
-  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING 
-  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
-  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
   ******************************************************************************
   @endverbatim
+
+### 04-August-2025 ###
+====================
+  + Upgrade to LwIP 2.2.1
+    For documentation, go to https://www.nongnu.org/lwip or run Doxygen tool
+    (https://www.doxygen.nl/) with configuration file doc/doxygen/lwip.Doxyfile
+    (see doc/doxygen/generate.bat or generate.sh).
+
+### 06-January-2025 ###
+========================
+  + sys_arch.c:
+     - Add new LWIP_CHECK_MULTITHREADING flag to enable or disable core lock checking functions.
+     - Add support for recursive Mutex.
+     - Add new API sys_lock_tcpip_core to lock the lwip core, mark the current core lock holder and the lock count.
+     - Add new API sys_unlock_tcpip_core to unlock the lwip core, reset the current core lock holder and the lock count.
+     - Add new API sys_mark_tcpip_thread to mark the lwip tcpip thread ID.
+     - Add new API sys_check_core_locking to check if core locking is done correctly.
+
+### 02-February-2024 ###
+========================
+  + Upgrade to LwIP V2.2.0 version
+     - For more details about new features and bug fixes please refer to CHANGELOG.txt and UPGRADING files.
 
 ### 18-August-2023 ###
 ========================

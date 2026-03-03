@@ -186,6 +186,8 @@ pbuf_init_alloced_pbuf(struct pbuf *p, void *payload, u16_t tot_len, u16_t len, 
   p->flags = flags;
   p->ref = 1;
   p->if_idx = NETIF_NO_INDEX;
+
+  LWIP_PBUF_CUSTOM_DATA_INIT(p);
 }
 
 /**
@@ -441,8 +443,11 @@ pbuf_realloc(struct pbuf *p, u16_t new_len)
 #endif /* LWIP_SUPPORT_CUSTOM_PBUF */
      ) {
     /* reallocate and adjust the length of the pbuf that will be split */
-    q = (struct pbuf *)mem_trim(q, (mem_size_t)(((u8_t *)q->payload - (u8_t *)q) + rem_len));
-    LWIP_ASSERT("mem_trim returned q == NULL", q != NULL);
+    struct pbuf *r = (struct pbuf *)mem_trim(q, (mem_size_t)(((u8_t *)q->payload - (u8_t *)q) + rem_len));
+    LWIP_ASSERT("mem_trim returned r == NULL", r != NULL);
+    /* help to detect faulty overridden implementation of mem_trim */
+    LWIP_ASSERT("mem_trim returned r != q", r == q);
+    LWIP_UNUSED_ARG(r);
   }
   /* adjust length fields for new last pbuf */
   q->len = rem_len;
@@ -677,7 +682,7 @@ pbuf_free_header(struct pbuf *q, u16_t size)
       struct pbuf *f = p;
       free_left = (u16_t)(free_left - p->len);
       p = p->next;
-      f->next = 0;
+      f->next = NULL;
       pbuf_free(f);
     } else {
       pbuf_remove_header(p, free_left);
@@ -705,7 +710,6 @@ pbuf_free_header(struct pbuf *q, u16_t size)
  * @return the number of pbufs that were de-allocated
  * from the head of the chain.
  *
- * @note MUST NOT be called on a packet queue (Not verified to work yet).
  * @note the reference counter of a pbuf equals the number of pointers
  * that refer to the pbuf (or into the pbuf).
  *
@@ -856,6 +860,7 @@ pbuf_cat(struct pbuf *h, struct pbuf *t)
 
   LWIP_ERROR("(h != NULL) && (t != NULL) (programmer violates API)",
              ((h != NULL) && (t != NULL)), return;);
+  LWIP_ASSERT("Creating an infinite loop", h != t);
 
   /* proceed to last pbuf of chain */
   for (p = h; p->next != NULL; p = p->next) {
@@ -941,12 +946,7 @@ pbuf_dechain(struct pbuf *p)
 
 /**
  * @ingroup pbuf
- * Create PBUF_RAM copies of pbufs.
- *
- * Used to queue packets on behalf of the lwIP stack, such as
- * ARP based queueing.
- *
- * @note You MUST explicitly use p = pbuf_take(p);
+ * Copy the contents of one packet buffer into another.
  *
  * @note Only one packet is copied, no packet queue!
  *
@@ -956,6 +956,7 @@ pbuf_dechain(struct pbuf *p)
  * @return ERR_OK if pbuf was copied
  *         ERR_ARG if one of the pbufs is NULL or p_to is not big
  *                 enough to hold p_from
+ *         ERR_VAL if any of the pbufs are part of a queue
  */
 err_t
 pbuf_copy(struct pbuf *p_to, const struct pbuf *p_from)
@@ -987,8 +988,7 @@ pbuf_copy(struct pbuf *p_to, const struct pbuf *p_from)
 err_t
 pbuf_copy_partial_pbuf(struct pbuf *p_to, const struct pbuf *p_from, u16_t copy_len, u16_t offset)
 {
-  size_t offset_to = offset, offset_from = 0, len_calc;
-  u16_t len;
+  size_t offset_to = offset, offset_from = 0, len;
 
   LWIP_DEBUGF(PBUF_DEBUG | LWIP_DBG_TRACE, ("pbuf_copy_partial_pbuf(%p, %p, %"U16_F", %"U16_F")\n",
               (const void *)p_to, (const void *)p_from, copy_len, offset));
@@ -1005,16 +1005,16 @@ pbuf_copy_partial_pbuf(struct pbuf *p_to, const struct pbuf *p_from, u16_t copy_
     /* copy one part of the original chain */
     if ((p_to->len - offset_to) >= (p_from->len - offset_from)) {
       /* complete current p_from fits into current p_to */
-      len_calc = p_from->len - offset_from;
+      len = p_from->len - offset_from;
     } else {
       /* current p_from does not fit into current p_to */
-      len_calc = p_to->len - offset_to;
+      len = p_to->len - offset_to;
     }
-    len = (u16_t)LWIP_MIN(copy_len, len_calc);
+    len = LWIP_MIN(copy_len, len);
     MEMCPY((u8_t *)p_to->payload + offset_to, (u8_t *)p_from->payload + offset_from, len);
     offset_to += len;
     offset_from += len;
-    copy_len -= len;
+    copy_len = (u16_t)(copy_len - len);
     LWIP_ASSERT("offset_to <= p_to->len", offset_to <= p_to->len);
     LWIP_ASSERT("offset_from <= p_from->len", offset_from <= p_from->len);
     if (offset_from >= p_from->len) {
@@ -1097,12 +1097,15 @@ pbuf_copy_partial(const struct pbuf *buf, void *dataptr, u16_t len, u16_t offset
  * a copy into the user-supplied buffer.
  *
  * @param p the pbuf from which to copy data
- * @param buffer the application supplied buffer
- * @param bufsize size of the application supplied buffer
- * @param len length of data to copy (dataptr must be big enough). No more
- * than buf->tot_len will be copied, irrespective of len
+ * @param buffer the application supplied buffer. May be NULL if the caller does not
+ * want to copy. In this case, offset + len should be checked against p->tot_len,
+ * since there's no way for the caller to know why NULL is returned.
+ * @param bufsize size of the application supplied buffer (when buffer is != NULL)
+ * @param len length of data to copy (p and buffer must be big enough)
  * @param offset offset into the packet buffer from where to begin copying len bytes
- * @return the number of bytes copied, or 0 on failure
+ * @return - pointer into pbuf payload if that is already contiguous (no copy needed)
+ *         - pointer to 'buffer' if data was not contiguous and had to be copied
+ *         - NULL on error
  */
 void *
 pbuf_get_contiguous(const struct pbuf *p, void *buffer, size_t bufsize, u16_t len, u16_t offset)
@@ -1111,14 +1114,17 @@ pbuf_get_contiguous(const struct pbuf *p, void *buffer, size_t bufsize, u16_t le
   u16_t out_offset;
 
   LWIP_ERROR("pbuf_get_contiguous: invalid buf", (p != NULL), return NULL;);
-  LWIP_ERROR("pbuf_get_contiguous: invalid dataptr", (buffer != NULL), return NULL;);
-  LWIP_ERROR("pbuf_get_contiguous: invalid dataptr", (bufsize >= len), return NULL;);
+  LWIP_ERROR("pbuf_get_contiguous: invalid bufsize", (buffer == NULL) || (bufsize >= len), return NULL;);
 
   q = pbuf_skip_const(p, offset, &out_offset);
   if (q != NULL) {
     if (q->len >= (out_offset + len)) {
       /* all data in this pbuf, return zero-copy */
       return (u8_t *)q->payload + out_offset;
+    }
+    if (buffer == NULL) {
+      /* the caller does not want to copy */
+      return NULL;
     }
     /* need to copy */
     if (pbuf_copy_partial(q, buffer, len, out_offset) != len) {
@@ -1206,7 +1212,7 @@ pbuf_skip_const(const struct pbuf *in, u16_t in_offset, u16_t *out_offset)
  * @param in input pbuf
  * @param in_offset offset to skip
  * @param out_offset resulting offset in the returned pbuf
- * @return the pbuf in the queue where the offset is
+ * @return the pbuf in the queue where the offset is or NULL when the offset is too high
  */
 struct pbuf *
 pbuf_skip(struct pbuf *in, u16_t in_offset, u16_t *out_offset)
